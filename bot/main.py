@@ -1,10 +1,10 @@
-THIS SHOULD BE A LINTER ERRORimport logging
+import logging
 import os
 import sqlite3
 import aiohttp
 from aiogram import Bot, Dispatcher, executor, types
 from dotenv import load_dotenv
-import openai
+from openai import OpenAI
 import io
 import matplotlib.pyplot as plt
 from aiogram.types import InputFile
@@ -16,7 +16,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
-openai.api_key = OPENAI_API_KEY
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # DB
 conn = sqlite3.connect("trading.db", check_same_thread=False)
