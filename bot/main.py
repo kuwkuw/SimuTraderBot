@@ -5,6 +5,9 @@ import aiohttp
 from aiogram import Bot, Dispatcher, executor, types
 from dotenv import load_dotenv
 import openai
+import io
+import matplotlib.pyplot as plt
+from aiogram.types import InputFile
 
 load_dotenv()
 
@@ -54,6 +57,7 @@ async def get_price(symbol: str) -> float:
         async with session.get(url) as resp:
             data = await resp.json()
             return data.get(symbol.lower(), {}).get("usd", 0)
+
 
 
 @dp.message_handler(commands=["start"])
@@ -161,3 +165,42 @@ async def analyze(message: types.Message):
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     executor.start_polling(dp, skip_updates=True)
+
+@dp.message_handler(commands=["trend"])
+async def trend(message: types.Message):
+    parts = message.text.strip().split()
+    if len(parts) != 2:
+        return await message.reply("⚠️ Формат: /trend BTC")
+
+    symbol = parts[1].lower()
+    try:
+        chart = await get_trend_plot(symbol)
+        await message.answer_photo(chart, caption=f"📈 Тренд {symbol.upper()} за 7 днів")
+    except Exception as e:
+        print(e)
+        await message.reply("❌ Не вдалося побудувати графік. Можливо, монета неправильна.")
+
+async def get_trend_plot(symbol: str) -> InputFile:
+    url = f"https://api.coingecko.com/api/v3/coins/{symbol.lower()}/market_chart?vs_currency=usd&days=7"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            data = await resp.json()
+
+    prices = data.get("prices", [])
+    if not prices:
+        raise ValueError("Не вдалося отримати дані")
+
+    dates = [p[0] / 1000 for p in prices]  # UNIX ms to s
+    values = [p[1] for p in prices]
+
+    plt.figure(figsize=(6, 3))
+    plt.plot(values, color="blue", linewidth=2)
+    plt.title(f"{symbol.upper()} / USD — 7 днів")
+    plt.grid(True)
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png")
+    buf.seek(0)
+    plt.close()
+    return InputFile(buf, filename=f"{symbol}_trend.png")
