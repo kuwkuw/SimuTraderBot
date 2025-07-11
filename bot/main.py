@@ -1,4 +1,4 @@
-import logging
+THIS SHOULD BE A LINTER ERRORimport logging
 import os
 import sqlite3
 import aiohttp
@@ -161,10 +161,6 @@ async def analyze(message: types.Message):
     advice = response.choices[0].message.content.strip()
     await message.answer(f"🧠 AI-аналіз:\n\n{advice}")
 
-
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    executor.start_polling(dp, skip_updates=True)
 
 @dp.message_handler(commands=["trend"])
 async def trend(message: types.Message):
