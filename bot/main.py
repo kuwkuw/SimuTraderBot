@@ -200,3 +200,8 @@ async def get_trend_plot(symbol: str) -> InputFile:
     buf.seek(0)
     plt.close()
     return InputFile(buf, filename=f"{symbol}_trend.png")
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    executor.start_polling(dp, skip_updates=True)
