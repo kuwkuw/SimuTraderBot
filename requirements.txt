@@ -1,5 +1,6 @@
 aiogram==2.25.2
 aiohttp==3.8.5
-openai
-python-dotenv
-matplotlib
+openai==1.10.0
+python-dotenv==1.0.0
+matplotlib==3.8.2
+psycopg2-binary==2.9.9

@@ -1,10 +1,10 @@
-import logging
+THIS SHOULD BE A LINTER ERRORimport logging
 import os
 import sqlite3
 import aiohttp
 from aiogram import Bot, Dispatcher, executor, types
 from dotenv import load_dotenv
-import openai
+from openai import OpenAI
 import io
 import matplotlib.pyplot as plt
 from aiogram.types import InputFile
@@ -13,14 +13,25 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
-openai.api_key = OPENAI_API_KEY
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# DB
-conn = sqlite3.connect("trading.db", check_same_thread=False)
-cursor = conn.cursor()
+# DB - Support both PostgreSQL (Railway) and SQLite (local)
+if DATABASE_URL:
+    import psycopg2
+    import psycopg2.extras
+    conn = psycopg2.connect(DATABASE_URL)
+    cursor = conn.cursor(real_dict_cursor=False)
+    # PostgreSQL syntax
+    placeholder = "%s"
+else:
+    # Local SQLite fallback
+    conn = sqlite3.connect("trading.db", check_same_thread=False)
+    cursor = conn.cursor()
+    placeholder = "?"
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
@@ -148,7 +159,7 @@ async def analyze(message: types.Message):
     for action, symbol, amount, price, timestamp in rows:
         prompt += f"{timestamp}: {action.upper()} {amount} {symbol} по ціні ${price:.2f}\n"
 
-    response = openai.ChatCompletion.create(
+    response = openai_client.chat.completions.create(
         model="gpt-4",
         messages=[
             {"role": "system", "content": "Ти криптоаналітик. Аналізуй дії користувача і давай поради."},
