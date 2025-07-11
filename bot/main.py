@@ -3,7 +3,6 @@ import os
 import sqlite3
 import aiohttp
 from aiogram import Bot, Dispatcher, executor, types
-from aiogram.types import ParseMode
 from dotenv import load_dotenv
 import openai
 
@@ -16,15 +15,17 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 openai.api_key = OPENAI_API_KEY
 
-# SQLite DB setup
+# DB
 conn = sqlite3.connect("trading.db", check_same_thread=False)
 cursor = conn.cursor()
+
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     balance REAL DEFAULT 10000.0
 )
 """)
+
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS portfolio (
     user_id INTEGER,
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS portfolio (
     PRIMARY KEY (user_id, symbol)
 )
 """)
+
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS history (
     user_id INTEGER,
@@ -45,8 +47,7 @@ CREATE TABLE IF NOT EXISTS history (
 """)
 conn.commit()
 
-
-# Get current crypto price from CoinGecko
+# 🔄 API CoinGecko
 async def get_price(symbol: str) -> float:
     url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol.lower()}&vs_currencies=usd"
     async with aiohttp.ClientSession() as session:
@@ -68,7 +69,7 @@ async def balance(message: types.Message):
     user_id = message.from_user.id
     cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
     bal = cursor.fetchone()[0]
-    await message.answer(f"💰 Ваш поточний баланс: ${bal:.2f}")
+    await message.answer(f"💰 Баланс: ${bal:.2f}")
 
 
 @dp.message_handler(commands=["buy", "sell"])
@@ -106,10 +107,57 @@ async def trade(message: types.Message):
     cursor.execute("INSERT INTO history (user_id, action, symbol, amount, price) VALUES (?, ?, ?, ?, ?)",
                    (user_id, action[1:], symbol, amount, price))
     conn.commit()
-    await message.answer(f"✅ {action[1:].capitalize()} {amount} {symbol} по ціні ${price:.2f}")
+    await message.answer(f"✅ {action[1:].capitalize()} {amount} {symbol} по ${price:.2f}")
 
 
 @dp.message_handler(commands=["portfolio"])
 async def portfolio(message: types.Message):
     user_id = message.from_user.id
-    cursor.execute
+    cursor.execute("SELECT symbol, amount FROM portfolio WHERE user_id=? AND amount > 0", (user_id,))
+    rows = cursor.fetchall()
+    if not rows:
+        return await message.answer("📦 Портфель порожній.")
+    lines = [f"{symbol}: {amt:.4f}" for symbol, amt in rows]
+    await message.answer("📊 Портфель:\n" + "\n".join(lines))
+
+
+@dp.message_handler(commands=["history"])
+async def history(message: types.Message):
+    user_id = message.from_user.id
+    cursor.execute("SELECT action, symbol, amount, price, timestamp FROM history WHERE user_id=? ORDER BY timestamp DESC LIMIT 10", (user_id,))
+    rows = cursor.fetchall()
+    if not rows:
+        return await message.answer("⛔ Історія порожня.")
+    text = "\n".join([f"{a.upper()} {s} {amt} @ ${p:.2f} [{t}]" for a, s, amt, p, t in rows])
+    await message.answer("📜 Останні угоди:\n" + text)
+
+
+@dp.message_handler(commands=["analyze"])
+async def analyze(message: types.Message):
+    user_id = message.from_user.id
+    cursor.execute("SELECT action, symbol, amount, price, timestamp FROM history WHERE user_id=? ORDER BY timestamp DESC LIMIT 10", (user_id,))
+    rows = cursor.fetchall()
+    if not rows:
+        return await message.answer("⛔ Немає угод для аналізу.")
+
+    prompt = "Оціни трейдингові угоди користувача:\n\n"
+    for action, symbol, amount, price, timestamp in rows:
+        prompt += f"{timestamp}: {action.upper()} {amount} {symbol} по ціні ${price:.2f}\n"
+
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "Ти криптоаналітик. Аналізуй дії користувача і давай поради."},
+            {"role": "user", "content": prompt}
+        ],
+        max_tokens=300,
+        temperature=0.7
+    )
+
+    advice = response.choices[0].message.content.strip()
+    await message.answer(f"🧠 AI-аналіз:\n\n{advice}")
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    executor.start_polling(dp, skip_updates=True)
