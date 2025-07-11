@@ -1,4 +1,4 @@
-THIS SHOULD BE A LINTER ERRORimport logging
+import logging
 import os
 import sqlite3
 import aiohttp
@@ -15,50 +15,96 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# Validate required environment variables
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable is required")
+
+# Initialize bot
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Initialize OpenAI client only if API key is provided
+openai_client = None
+if OPENAI_API_KEY:
+    try:
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        logging.info("OpenAI client initialized successfully")
+    except Exception as e:
+        logging.error(f"Failed to initialize OpenAI client: {e}")
+        openai_client = None
+else:
+    logging.warning("OPENAI_API_KEY not provided - AI analysis features will be disabled")
 
 # DB - Support both PostgreSQL (Railway) and SQLite (local)
 if DATABASE_URL:
     import psycopg2
-    import psycopg2.extras
     conn = psycopg2.connect(DATABASE_URL)
-    cursor = conn.cursor(real_dict_cursor=False)
-    # PostgreSQL syntax
-    placeholder = "%s"
+    cursor = conn.cursor()
+    logging.info("Connected to PostgreSQL database")
 else:
     # Local SQLite fallback
     conn = sqlite3.connect("trading.db", check_same_thread=False)
     cursor = conn.cursor()
-    placeholder = "?"
+    logging.info("Connected to SQLite database")
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    balance REAL DEFAULT 10000.0
-)
-""")
+# Create tables (compatible with both SQLite and PostgreSQL)
+if DATABASE_URL:
+    # PostgreSQL syntax
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id BIGINT PRIMARY KEY,
+        balance DECIMAL(15,2) DEFAULT 10000.0
+    )
+    """)
+    
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS portfolio (
+        user_id BIGINT,
+        symbol VARCHAR(20),
+        amount DECIMAL(15,8),
+        PRIMARY KEY (user_id, symbol)
+    )
+    """)
+    
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS history (
+        user_id BIGINT,
+        action VARCHAR(10),
+        symbol VARCHAR(20),
+        amount DECIMAL(15,8),
+        price DECIMAL(15,2),
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+else:
+    # SQLite syntax
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        balance REAL DEFAULT 10000.0
+    )
+    """)
+    
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS portfolio (
+        user_id INTEGER,
+        symbol TEXT,
+        amount REAL,
+        PRIMARY KEY (user_id, symbol)
+    )
+    """)
+    
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS history (
+        user_id INTEGER,
+        action TEXT,
+        symbol TEXT,
+        amount REAL,
+        price REAL,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS portfolio (
-    user_id INTEGER,
-    symbol TEXT,
-    amount REAL,
-    PRIMARY KEY (user_id, symbol)
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS history (
-    user_id INTEGER,
-    action TEXT,
-    symbol TEXT,
-    amount REAL,
-    price REAL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-)
-""")
 conn.commit()
 
 # 🔄 API CoinGecko
@@ -74,7 +120,10 @@ async def get_price(symbol: str) -> float:
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
     user_id = message.from_user.id
-    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    if DATABASE_URL:
+        cursor.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT DO NOTHING", (user_id,))
+    else:
+        cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
     conn.commit()
     await message.answer("👋 Вітаю в симуляторі криптотрейдингу! Ваш баланс: $10,000")
 
@@ -82,7 +131,10 @@ async def start(message: types.Message):
 @dp.message_handler(commands=["balance"])
 async def balance(message: types.Message):
     user_id = message.from_user.id
-    cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
+    if DATABASE_URL:
+        cursor.execute("SELECT balance FROM users WHERE user_id=%s", (user_id,))
+    else:
+        cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
     bal = cursor.fetchone()[0]
     await message.answer(f"💰 Баланс: ${bal:.2f}")
 
@@ -102,25 +154,51 @@ async def trade(message: types.Message):
         return await message.reply("⚠️ Невідома монета або немає ціни.")
 
     cost = amount * price
-    cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
+    
+    # Get user balance
+    if DATABASE_URL:
+        cursor.execute("SELECT balance FROM users WHERE user_id=%s", (user_id,))
+    else:
+        cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
     bal = cursor.fetchone()[0]
 
     if action == "/buy":
         if bal < cost:
             return await message.reply("❌ Недостатньо коштів.")
-        cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (cost, user_id))
-        cursor.execute("INSERT OR IGNORE INTO portfolio (user_id, symbol, amount) VALUES (?, ?, 0)", (user_id, symbol))
-        cursor.execute("UPDATE portfolio SET amount = amount + ? WHERE user_id=? AND symbol=?", (amount, user_id, symbol))
+        
+        if DATABASE_URL:
+            cursor.execute("UPDATE users SET balance = balance - %s WHERE user_id=%s", (cost, user_id))
+            cursor.execute("INSERT INTO portfolio (user_id, symbol, amount) VALUES (%s, %s, 0) ON CONFLICT (user_id, symbol) DO NOTHING", (user_id, symbol))
+            cursor.execute("UPDATE portfolio SET amount = amount + %s WHERE user_id=%s AND symbol=%s", (amount, user_id, symbol))
+        else:
+            cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (cost, user_id))
+            cursor.execute("INSERT OR IGNORE INTO portfolio (user_id, symbol, amount) VALUES (?, ?, 0)", (user_id, symbol))
+            cursor.execute("UPDATE portfolio SET amount = amount + ? WHERE user_id=? AND symbol=?", (amount, user_id, symbol))
+            
     elif action == "/sell":
-        cursor.execute("SELECT amount FROM portfolio WHERE user_id=? AND symbol=?", (user_id, symbol))
+        if DATABASE_URL:
+            cursor.execute("SELECT amount FROM portfolio WHERE user_id=%s AND symbol=%s", (user_id, symbol))
+        else:
+            cursor.execute("SELECT amount FROM portfolio WHERE user_id=? AND symbol=?", (user_id, symbol))
+            
         result = cursor.fetchone()
         if not result or result[0] < amount:
             return await message.reply("❌ Недостатньо активу для продажу.")
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (cost, user_id))
-        cursor.execute("UPDATE portfolio SET amount = amount - ? WHERE user_id=? AND symbol=?", (amount, user_id, symbol))
+            
+        if DATABASE_URL:
+            cursor.execute("UPDATE users SET balance = balance + %s WHERE user_id=%s", (cost, user_id))
+            cursor.execute("UPDATE portfolio SET amount = amount - %s WHERE user_id=%s AND symbol=%s", (amount, user_id, symbol))
+        else:
+            cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (cost, user_id))
+            cursor.execute("UPDATE portfolio SET amount = amount - ? WHERE user_id=? AND symbol=?", (amount, user_id, symbol))
 
-    cursor.execute("INSERT INTO history (user_id, action, symbol, amount, price) VALUES (?, ?, ?, ?, ?)",
-                   (user_id, action[1:], symbol, amount, price))
+    # Insert into history
+    if DATABASE_URL:
+        cursor.execute("INSERT INTO history (user_id, action, symbol, amount, price) VALUES (%s, %s, %s, %s, %s)",
+                       (user_id, action[1:], symbol, amount, price))
+    else:
+        cursor.execute("INSERT INTO history (user_id, action, symbol, amount, price) VALUES (?, ?, ?, ?, ?)",
+                       (user_id, action[1:], symbol, amount, price))
     conn.commit()
     await message.answer(f"✅ {action[1:].capitalize()} {amount} {symbol} по ${price:.2f}")
 
@@ -128,7 +206,10 @@ async def trade(message: types.Message):
 @dp.message_handler(commands=["portfolio"])
 async def portfolio(message: types.Message):
     user_id = message.from_user.id
-    cursor.execute("SELECT symbol, amount FROM portfolio WHERE user_id=? AND amount > 0", (user_id,))
+    if DATABASE_URL:
+        cursor.execute("SELECT symbol, amount FROM portfolio WHERE user_id=%s AND amount > 0", (user_id,))
+    else:
+        cursor.execute("SELECT symbol, amount FROM portfolio WHERE user_id=? AND amount > 0", (user_id,))
     rows = cursor.fetchall()
     if not rows:
         return await message.answer("📦 Портфель порожній.")
@@ -139,7 +220,10 @@ async def portfolio(message: types.Message):
 @dp.message_handler(commands=["history"])
 async def history(message: types.Message):
     user_id = message.from_user.id
-    cursor.execute("SELECT action, symbol, amount, price, timestamp FROM history WHERE user_id=? ORDER BY timestamp DESC LIMIT 10", (user_id,))
+    if DATABASE_URL:
+        cursor.execute("SELECT action, symbol, amount, price, timestamp FROM history WHERE user_id=%s ORDER BY timestamp DESC LIMIT 10", (user_id,))
+    else:
+        cursor.execute("SELECT action, symbol, amount, price, timestamp FROM history WHERE user_id=? ORDER BY timestamp DESC LIMIT 10", (user_id,))
     rows = cursor.fetchall()
     if not rows:
         return await message.answer("⛔ Історія порожня.")
@@ -149,8 +233,18 @@ async def history(message: types.Message):
 
 @dp.message_handler(commands=["analyze"])
 async def analyze(message: types.Message):
+    # Check if OpenAI is available
+    if not openai_client:
+        return await message.answer("❌ AI-аналіз недоступний. OpenAI API ключ не налаштований.")
+    
     user_id = message.from_user.id
-    cursor.execute("SELECT action, symbol, amount, price, timestamp FROM history WHERE user_id=? ORDER BY timestamp DESC LIMIT 10", (user_id,))
+    
+    # Use appropriate placeholder for SQL
+    if DATABASE_URL:
+        cursor.execute("SELECT action, symbol, amount, price, timestamp FROM history WHERE user_id=%s ORDER BY timestamp DESC LIMIT 10", (user_id,))
+    else:
+        cursor.execute("SELECT action, symbol, amount, price, timestamp FROM history WHERE user_id=? ORDER BY timestamp DESC LIMIT 10", (user_id,))
+    
     rows = cursor.fetchall()
     if not rows:
         return await message.answer("⛔ Немає угод для аналізу.")
@@ -159,23 +253,23 @@ async def analyze(message: types.Message):
     for action, symbol, amount, price, timestamp in rows:
         prompt += f"{timestamp}: {action.upper()} {amount} {symbol} по ціні ${price:.2f}\n"
 
-    response = openai_client.chat.completions.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "Ти криптоаналітик. Аналізуй дії користувача і давай поради."},
-            {"role": "user", "content": prompt}
-        ],
-        max_tokens=300,
-        temperature=0.7
-    )
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "Ти криптоаналітик. Аналізуй дії користувача і давай поради."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=300,
+            temperature=0.7
+        )
 
-    advice = response.choices[0].message.content.strip()
-    await message.answer(f"🧠 AI-аналіз:\n\n{advice}")
+        advice = response.choices[0].message.content.strip()
+        await message.answer(f"🧠 AI-аналіз:\n\n{advice}")
+    except Exception as e:
+        logging.error(f"OpenAI API error: {e}")
+        await message.answer("❌ Помилка при отриманні AI-аналізу. Спробуйте пізніше.")
 
-
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    executor.start_polling(dp, skip_updates=True)
 
 @dp.message_handler(commands=["trend"])
 async def trend(message: types.Message):
@@ -188,8 +282,9 @@ async def trend(message: types.Message):
         chart = await get_trend_plot(symbol)
         await message.answer_photo(chart, caption=f"📈 Тренд {symbol.upper()} за 7 днів")
     except Exception as e:
-        print(e)
+        logging.error(f"Trend plot error: {e}")
         await message.reply("❌ Не вдалося побудувати графік. Можливо, монета неправильна.")
+
 
 async def get_trend_plot(symbol: str) -> InputFile:
     url = f"https://api.coingecko.com/api/v3/coins/{symbol.lower()}/market_chart?vs_currency=usd&days=7"
@@ -215,3 +310,8 @@ async def get_trend_plot(symbol: str) -> InputFile:
     buf.seek(0)
     plt.close()
     return InputFile(buf, filename=f"{symbol}_trend.png")
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    executor.start_polling(dp, skip_updates=True)
