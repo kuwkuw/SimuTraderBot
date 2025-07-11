@@ -14,9 +14,23 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable is required")
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Initialize OpenAI client only if API key is available
+openai_client = None
+if OPENAI_API_KEY:
+    try:
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        logging.info("OpenAI client initialized successfully")
+    except Exception as e:
+        logging.error(f"Failed to initialize OpenAI client: {e}")
+        openai_client = None
+else:
+    logging.warning("OPENAI_API_KEY not found. AI analysis feature will be disabled.")
 
 # DB
 conn = sqlite3.connect("trading.db", check_same_thread=False)
@@ -72,7 +86,51 @@ async def start(message: types.Message):
     user_id = message.from_user.id
     cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
     conn.commit()
-    await message.answer("👋 Вітаю в симуляторі криптотрейдингу! Ваш баланс: $10,000")
+    
+    ai_status = "✅ Доступний" if openai_client else "❌ Недоступний"
+    
+    welcome_text = f"""👋 Вітаю в симуляторі криптотрейдингу! 
+
+💰 Стартовий баланс: $10,000
+
+📚 Доступні команди:
+/balance - перевірити баланс
+/buy <символ> <кількість> - купити криптовалюту
+/sell <символ> <кількість> - продати криптовалюту
+/portfolio - переглянути портфель
+/history - історія угод
+/trend <символ> - графік ціни за 7 днів
+/analyze - AI-аналіз угод ({ai_status})
+/help - показати цю довідку
+
+Приклад: /buy bitcoin 0.1"""
+    
+    await message.answer(welcome_text)
+
+
+@dp.message_handler(commands=["help"])
+async def help_command(message: types.Message):
+    ai_status = "✅ Доступний" if openai_client else "❌ Недоступний"
+    
+    help_text = f"""📚 Доступні команди:
+
+💰 /balance - перевірити баланс
+📈 /buy <символ> <кількість> - купити криптовалюту
+📉 /sell <символ> <кількість> - продати криптовалюту
+📊 /portfolio - переглянути портфель
+📜 /history - історія угод (останні 10)
+📊 /trend <символ> - графік ціни за 7 днів
+🧠 /analyze - AI-аналіз угод ({ai_status})
+❓ /help - показати цю довідку
+
+💡 Приклади:
+• /buy bitcoin 0.1
+• /sell ethereum 0.5
+• /trend bitcoin
+
+🚀 Почніть торгувати зараз!"""
+    
+    await message.answer(help_text)
 
 
 @dp.message_handler(commands=["balance"])
@@ -163,6 +221,10 @@ async def analyze(message: types.Message):
     rows = cursor.fetchall()
     if not rows:
         return await message.answer("⛔ Немає угод для аналізу.")
+
+    # Check if OpenAI is available
+    if not openai_client:
+        return await message.answer("❌ AI-аналіз недоступний. OpenAI API не налаштований.")
 
     prompt = "Оціни трейдингові угоди користувача:\n\n"
     for action, symbol, amount, price, timestamp in rows:
