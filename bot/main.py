@@ -4,7 +4,7 @@ import sqlite3
 import aiohttp
 from aiogram import Bot, Dispatcher, executor, types
 from dotenv import load_dotenv
-import openai
+from openai import OpenAI
 import io
 import matplotlib.pyplot as plt
 from aiogram.types import InputFile
@@ -16,7 +16,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
-openai.api_key = OPENAI_API_KEY
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # DB
 conn = sqlite3.connect("trading.db", check_same_thread=False)
@@ -53,10 +53,17 @@ conn.commit()
 # 🔄 API CoinGecko
 async def get_price(symbol: str) -> float:
     url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol.lower()}&vs_currencies=usd"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            data = await resp.json()
-            return data.get(symbol.lower(), {}).get("usd", 0)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get(symbol.lower(), {}).get("usd", 0)
+                else:
+                    return 0
+    except Exception as e:
+        logging.error(f"Error fetching price for {symbol}: {e}")
+        return 0
 
 
 
@@ -72,8 +79,12 @@ async def start(message: types.Message):
 async def balance(message: types.Message):
     user_id = message.from_user.id
     cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-    bal = cursor.fetchone()[0]
-    await message.answer(f"💰 Баланс: ${bal:.2f}")
+    result = cursor.fetchone()
+    if result:
+        bal = result[0]
+        await message.answer(f"💰 Баланс: ${bal:.2f}")
+    else:
+        await message.answer("❌ Користувача не знайдено. Використайте /start для початку.")
 
 
 @dp.message_handler(commands=["buy", "sell"])
@@ -83,8 +94,14 @@ async def trade(message: types.Message):
     if len(parts) != 3:
         return await message.reply("⚠️ Формат: /buy BTC 0.1 або /sell ETH 0.2")
     
-    action, symbol, amount = parts
-    amount = float(amount)
+    action, symbol, amount_str = parts
+    try:
+        amount = float(amount_str)
+        if amount <= 0:
+            return await message.reply("⚠️ Кількість повинна бути більше 0.")
+    except ValueError:
+        return await message.reply("⚠️ Невірний формат кількості.")
+    
     symbol = symbol.upper()
     price = await get_price(symbol)
     if not price:
@@ -92,7 +109,10 @@ async def trade(message: types.Message):
 
     cost = amount * price
     cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-    bal = cursor.fetchone()[0]
+    result = cursor.fetchone()
+    if not result:
+        return await message.reply("❌ Користувача не знайдено. Використайте /start для початку.")
+    bal = result[0]
 
     if action == "/buy":
         if bal < cost:
@@ -148,23 +168,23 @@ async def analyze(message: types.Message):
     for action, symbol, amount, price, timestamp in rows:
         prompt += f"{timestamp}: {action.upper()} {amount} {symbol} по ціні ${price:.2f}\n"
 
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "Ти криптоаналітик. Аналізуй дії користувача і давай поради."},
-            {"role": "user", "content": prompt}
-        ],
-        max_tokens=300,
-        temperature=0.7
-    )
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "Ти криптоаналітик. Аналізуй дії користувача і давай поради."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=300,
+            temperature=0.7
+        )
 
-    advice = response.choices[0].message.content.strip()
-    await message.answer(f"🧠 AI-аналіз:\n\n{advice}")
+        advice = response.choices[0].message.content.strip()
+        await message.answer(f"🧠 AI-аналіз:\n\n{advice}")
+    except Exception as e:
+        logging.error(f"OpenAI API error: {e}")
+        await message.answer("❌ Не вдалося отримати аналіз від AI. Спробуйте пізніше.")
 
-
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    executor.start_polling(dp, skip_updates=True)
 
 @dp.message_handler(commands=["trend"])
 async def trend(message: types.Message):
@@ -204,3 +224,8 @@ async def get_trend_plot(symbol: str) -> InputFile:
     buf.seek(0)
     plt.close()
     return InputFile(buf, filename=f"{symbol}_trend.png")
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    executor.start_polling(dp, skip_updates=True)
