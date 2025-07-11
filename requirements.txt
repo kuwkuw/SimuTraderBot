@@ -1,4 +1,4 @@
-taiogram
+aiogram
 python-dotenv
 aiohttp
 openai
