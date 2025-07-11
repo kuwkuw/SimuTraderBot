@@ -1,0 +1,4 @@
+taiogram
+python-dotenv
+aiohttp
+openai
