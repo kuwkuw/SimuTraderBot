@@ -14,9 +14,23 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# Validate required environment variables
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable is required")
+
+if not OPENAI_API_KEY:
+    logging.warning("OPENAI_API_KEY environment variable is not set. AI analysis features will be disabled.")
+    openai_client = None
+else:
+    try:
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        logging.info("OpenAI client initialized successfully")
+    except Exception as e:
+        logging.error(f"Failed to initialize OpenAI client: {e}")
+        openai_client = None
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # DB
 conn = sqlite3.connect("trading.db", check_same_thread=False)
@@ -158,6 +172,10 @@ async def history(message: types.Message):
 
 @dp.message_handler(commands=["analyze"])
 async def analyze(message: types.Message):
+    if not openai_client:
+        await message.answer("❌ AI-аналіз недоступний. Сервіс налаштовується.")
+        return
+        
     user_id = message.from_user.id
     cursor.execute("SELECT action, symbol, amount, price, timestamp FROM history WHERE user_id=? ORDER BY timestamp DESC LIMIT 10", (user_id,))
     rows = cursor.fetchall()
