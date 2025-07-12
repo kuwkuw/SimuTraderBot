@@ -65,6 +65,16 @@ CREATE TABLE IF NOT EXISTS history (
 conn.commit()
 
 # 🔄 API CoinGecko
+
+SYMBOL_MAP = {
+    "btc": "bitcoin",
+    "eth": "ethereum",
+    "sol": "solana",
+    "ada": "cardano",
+    "doge": "dogecoin",
+    "dot": "polkadot",
+    "bnb": "binancecoin"
+}
 async def get_price(symbol: str) -> float:
     symbol_id = SYMBOL_MAP.get(symbol.lower())
     if not symbol_id:
