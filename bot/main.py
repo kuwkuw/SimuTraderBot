@@ -66,7 +66,12 @@ conn.commit()
 
 # 🔄 API CoinGecko
 async def get_price(symbol: str) -> float:
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol.lower()}&vs_currencies=usd"
+    symbol_id = SYMBOL_MAP.get(symbol.lower())
+    if not symbol_id:
+        raise ValueError("Невідомий символ монети")
+
+    url = f"https://api.coingecko.com/api/v3/coins/{symbol_id}/market_chart?vs_currency=usd&days=7"
+    #url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol.lower()}&vs_currencies=usd"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
