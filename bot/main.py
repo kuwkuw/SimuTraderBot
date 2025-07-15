@@ -191,7 +191,7 @@ async def analyze(message: types.Message):
         prompt += f"{timestamp}: {action.upper()} {amount} {symbol} по ціні ${price:.2f}\n"
 
     # Gemini API call
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
     headers = {"Content-Type": "application/json"}
     params = {"key": GEMINI_API_KEY}
     data = {
