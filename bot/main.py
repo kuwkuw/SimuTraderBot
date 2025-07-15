@@ -75,19 +75,19 @@ SYMBOL_MAP = {
     "dot": "polkadot",
     "bnb": "binancecoin"
 }
+
 async def get_price(symbol: str) -> float:
     symbol_id = SYMBOL_MAP.get(symbol.lower())
     if not symbol_id:
         raise ValueError("Невідомий символ монети")
 
-    url = f"https://api.coingecko.com/api/v3/coins/{symbol_id}/market_chart?vs_currency=usd&days=7"
-    #url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol.lower()}&vs_currencies=usd"
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol_id}&vs_currencies=usd"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get(symbol.lower(), {}).get("usd", 0)
+                    return data.get(symbol_id, {}).get("usd", 0)
                 else:
                     return 0
     except Exception as e:
@@ -131,7 +131,7 @@ async def trade(message: types.Message):
     except ValueError:
         return await message.reply("⚠️ Невірний формат кількості.")
     
-    symbol = symbol.upper()
+    symbol = symbol.lower()
     price = await get_price(symbol)
     if not price:
         return await message.reply("⚠️ Невідома монета або немає ціни.")
@@ -160,7 +160,7 @@ async def trade(message: types.Message):
     cursor.execute("INSERT INTO history (user_id, action, symbol, amount, price) VALUES (?, ?, ?, ?, ?)",
                    (user_id, action[1:], symbol, amount, price))
     conn.commit()
-    await message.answer(f"✅ {action[1:].capitalize()} {amount} {symbol} по ${price:.2f}")
+    await message.answer(f"✅ {action[1:].capitalize()} {amount} {symbol.upper()} по ${price:.2f}")
 
 
 @dp.message_handler(commands=["portfolio"])
@@ -234,7 +234,10 @@ async def trend(message: types.Message):
         await message.reply("❌ Не вдалося побудувати графік. Можливо, монета неправильна.")
 
 async def get_trend_plot(symbol: str) -> InputFile:
-    url = f"https://api.coingecko.com/api/v3/coins/{symbol.lower()}/market_chart?vs_currency=usd&days=7"
+    symbol_id = SYMBOL_MAP.get(symbol.lower())
+    if not symbol_id:
+        raise ValueError("Невідомий символ монети")
+    url = f"https://api.coingecko.com/api/v3/coins/{symbol_id}/market_chart?vs_currency=usd&days=7"
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
             data = await resp.json()
