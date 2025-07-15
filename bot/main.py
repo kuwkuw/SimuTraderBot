@@ -203,7 +203,7 @@ async def analyze(message: types.Message):
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4",
+            model="o4-mini-2025-04-16",
             messages=[
                 {"role": "system", "content": "Ти криптоаналітик. Аналізуй дії користувача і давай поради."},
                 {"role": "user", "content": prompt}
