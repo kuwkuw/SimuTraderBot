@@ -4,7 +4,7 @@ import sqlite3
 import aiohttp
 from aiogram import Bot, Dispatcher, executor, types
 from dotenv import load_dotenv
-from openai import OpenAI
+import requests
 import io
 import matplotlib.pyplot as plt
 from aiogram.types import InputFile
@@ -12,22 +12,11 @@ from aiogram.types import InputFile
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Validate required environment variables
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is required")
-
-if not OPENAI_API_KEY:
-    logging.warning("OPENAI_API_KEY environment variable is not set. AI analysis features will be disabled.")
-    openai_client = None
-else:
-    try:
-        openai_client = OpenAI(api_key=OPENAI_API_KEY)
-        logging.info("OpenAI client initialized successfully")
-    except Exception as e:
-        logging.error(f"Failed to initialize OpenAI client: {e}")
-        openai_client = None
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
@@ -187,7 +176,7 @@ async def history(message: types.Message):
 
 @dp.message_handler(commands=["analyze"])
 async def analyze(message: types.Message):
-    if not openai_client:
+    if not GEMINI_API_KEY:
         await message.answer("❌ AI-аналіз недоступний. Сервіс налаштовується.")
         return
         
@@ -201,21 +190,23 @@ async def analyze(message: types.Message):
     for action, symbol, amount, price, timestamp in rows:
         prompt += f"{timestamp}: {action.upper()} {amount} {symbol} по ціні ${price:.2f}\n"
 
+    # Gemini API call
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
+    headers = {"Content-Type": "application/json"}
+    params = {"key": GEMINI_API_KEY}
+    data = {
+        "contents": [
+            {"role": "user", "parts": [{"text": prompt}]}
+        ]
+    }
     try:
-        response = openai_client.chat.completions.create(
-            model="o4-mini",
-            messages=[
-                {"role": "system", "content": "Ти криптоаналітик. Аналізуй дії користувача і давай поради."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=300,
-            temperature=0.7
-        )
-
-        advice = response.choices[0].message.content.strip()
+        response = requests.post(url, headers=headers, params=params, json=data, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        advice = result["candidates"][0]["content"]["parts"][0]["text"].strip()
         await message.answer(f"🧠 AI-аналіз:\n\n{advice}")
     except Exception as e:
-        logging.error(f"OpenAI API error: {e}")
+        logging.error(f"Gemini API error: {e}")
         await message.answer("❌ Не вдалося отримати аналіз від AI. Спробуйте пізніше.")
 
 
