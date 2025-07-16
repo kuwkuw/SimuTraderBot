@@ -5,7 +5,7 @@ def generate_gemini_analysis(api_key: str, prompt: str) -> Optional[str]:
     """
     Calls the Gemini API with the given prompt and returns the response text, or None on error.
     """
-    url = "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
     headers = {"Content-Type": "application/json"}
     params = {"key": api_key}
     data = {
