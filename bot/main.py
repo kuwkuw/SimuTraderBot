@@ -8,6 +8,9 @@ import requests
 import io
 import matplotlib.pyplot as plt
 from aiogram.types import InputFile
+from gemini_api import generate_gemini_analysis
+from db import add_user, get_balance, update_balance, get_portfolio, add_to_portfolio, remove_from_portfolio, get_portfolio_amount, add_history, get_history
+from coingecko_api import get_price, get_trend_plot
 
 load_dotenv()
 
@@ -88,18 +91,15 @@ async def get_price(symbol: str) -> float:
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
     user_id = message.from_user.id
-    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-    conn.commit()
+    add_user(user_id)
     await message.answer("👋 Вітаю в симуляторі криптотрейдингу! Ваш баланс: $10,000")
 
 
 @dp.message_handler(commands=["balance"])
 async def balance(message: types.Message):
     user_id = message.from_user.id
-    cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-    result = cursor.fetchone()
-    if result:
-        bal = result[0]
+    bal = get_balance(user_id)
+    if bal is not None:
         await message.answer(f"💰 Баланс: ${bal:.2f}")
     else:
         await message.answer("❌ Користувача не знайдено. Використайте /start для початку.")
@@ -126,37 +126,30 @@ async def trade(message: types.Message):
         return await message.reply("⚠️ Невідома монета або немає ціни.")
 
     cost = amount * price
-    cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-    result = cursor.fetchone()
-    if not result:
+    bal = get_balance(user_id)
+    if bal is None:
         return await message.reply("❌ Користувача не знайдено. Використайте /start для початку.")
-    bal = result[0]
 
     if action == "/buy":
         if bal < cost:
             return await message.reply("❌ Недостатньо коштів.")
-        cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (cost, user_id))
-        cursor.execute("INSERT OR IGNORE INTO portfolio (user_id, symbol, amount) VALUES (?, ?, 0)", (user_id, symbol))
-        cursor.execute("UPDATE portfolio SET amount = amount + ? WHERE user_id=? AND symbol=?", (amount, user_id, symbol))
+        update_balance(user_id, bal - cost)
+        add_to_portfolio(user_id, symbol, amount)
     elif action == "/sell":
-        cursor.execute("SELECT amount FROM portfolio WHERE user_id=? AND symbol=?", (user_id, symbol))
-        result = cursor.fetchone()
-        if not result or result[0] < amount:
+        portfolio_amt = get_portfolio_amount(user_id, symbol)
+        if not portfolio_amt or portfolio_amt < amount:
             return await message.reply("❌ Недостатньо активу для продажу.")
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (cost, user_id))
-        cursor.execute("UPDATE portfolio SET amount = amount - ? WHERE user_id=? AND symbol=?", (amount, user_id, symbol))
+        update_balance(user_id, bal + cost)
+        remove_from_portfolio(user_id, symbol, amount)
 
-    cursor.execute("INSERT INTO history (user_id, action, symbol, amount, price) VALUES (?, ?, ?, ?, ?)",
-                   (user_id, action[1:], symbol, amount, price))
-    conn.commit()
+    add_history(user_id, action[1:], symbol, amount, price)
     await message.answer(f"✅ {action[1:].capitalize()} {amount} {symbol.upper()} по ${price:.2f}")
 
 
 @dp.message_handler(commands=["portfolio"])
 async def portfolio(message: types.Message):
     user_id = message.from_user.id
-    cursor.execute("SELECT symbol, amount FROM portfolio WHERE user_id=? AND amount > 0", (user_id,))
-    rows = cursor.fetchall()
+    rows = get_portfolio(user_id)
     if not rows:
         return await message.answer("📦 Портфель порожній.")
     lines = [f"{symbol}: {amt:.4f}" for symbol, amt in rows]
@@ -166,8 +159,7 @@ async def portfolio(message: types.Message):
 @dp.message_handler(commands=["history"])
 async def history(message: types.Message):
     user_id = message.from_user.id
-    cursor.execute("SELECT action, symbol, amount, price, timestamp FROM history WHERE user_id=? ORDER BY timestamp DESC LIMIT 10", (user_id,))
-    rows = cursor.fetchall()
+    rows = get_history(user_id)
     if not rows:
         return await message.answer("⛔ Історія порожня.")
     text = "\n".join([f"{a.upper()} {s} {amt} @ ${p:.2f} [{t}]" for a, s, amt, p, t in rows])
@@ -190,21 +182,12 @@ async def analyze(message: types.Message):
     for action, symbol, amount, price, timestamp in rows:
         prompt += f"{timestamp}: {action.upper()} {amount} {symbol} по ціні ${price:.2f}\n"
 
-    # Gemini API call
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-    headers = {"Content-Type": "application/json"}
-    params = {"key": GEMINI_API_KEY}
-    data = {
-        "contents": [
-            {"role": "user", "parts": [{"text": prompt}]}
-        ]
-    }
     try:
-        response = requests.post(url, headers=headers, params=params, json=data, timeout=30)
-        response.raise_for_status()
-        result = response.json()
-        advice = result["candidates"][0]["content"]["parts"][0]["text"].strip()
-        await message.answer(f"🧠 AI-аналіз:\n\n{advice}")
+        advice = generate_gemini_analysis(GEMINI_API_KEY, prompt)
+        if advice:
+            await message.answer(f"🧠 AI-аналіз:\n\n{advice}")
+        else:
+            await message.answer("❌ Не вдалося отримати аналіз від AI. Спробуйте пізніше.")
     except Exception as e:
         logging.error(f"Gemini API error: {e}")
         await message.answer("❌ Не вдалося отримати аналіз від AI. Спробуйте пізніше.")
